@@ -15,8 +15,6 @@ import struct
 import urllib.request, urllib.parse, urllib.error
 import argparse
 import traceback
-import pdb
-
 
 
 ################################################################################
@@ -357,6 +355,20 @@ class JDWPClient:
         buf = self.read_reply()
         return buf
 
+    def invokeVoid(self, objId, threadId, classId, methId, *args):
+        data = self.format(self.objectIDSize, objId)
+        data+= self.format(self.objectIDSize, threadId)
+        data+= self.format(self.referenceTypeIDSize, classId)
+        data+= self.format(self.methodIDSize, methId)
+        data+= struct.pack(">I", len(args))
+        for arg in args:
+            data+= arg
+        data+= struct.pack(">I", 0)
+
+        self.socket.sendall( self.create_packet(INVOKEMETHOD_SIG, data=data) )
+        buf = None
+        return buf
+
     def solve_string(self, objId):
         self.socket.sendall( self.create_packet(STRINGVALUE_SIG, data=objId) )
         buf = self.read_reply()
@@ -648,8 +660,8 @@ if __name__ == "__main__":
         print ("[+] Exiting on user's request")
 
     except Exception as e:
-        traceback.print_exc()
         print(("[-] Exception: %s" % e))
+        traceback.print_exc()
         retcode = 1
         cli = None
 
